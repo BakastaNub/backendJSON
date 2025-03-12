@@ -1,10 +1,44 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
 import json
 from datetime import datetime
+import uuid
+import os
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde el archivo .env
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+# Configuración de la base de datos MySQL
+DATABASE_URL = os.getenv('DATABASE_URL', 'mysql://root:admin123@localhost/jsonreader')
+
+print("Intentando conectar a la base de datos MySQL...")
+
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+# Modelo para los archivos JSON
+class JsonDocument(db.Model):
+    __tablename__ = 'json_documents'
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    nombre_cliente = db.Column(db.String(100))
+    centro_comercial = db.Column(db.String(100))
+    fecha_pago = db.Column(db.String(10))
+    hora_pago = db.Column(db.String(10))
+    modelo_placa = db.Column(db.String(100))
+    descripcion = db.Column(db.Text)
+    json_data = db.Column(db.Text)
+    fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+
+# Crear las tablas si no existen
+with app.app_context():
+    db.create_all()
+    print("Tablas creadas/verificadas en la base de datos MySQL")
 
 def to_camel_case(text):
     return ' '.join(word.capitalize() for word in text.split())
@@ -15,7 +49,7 @@ def process_json():
         # Obtener datos del formulario
         issuer_name = request.form.get('issuerName')
         shopping_center = request.form.get('shoppingCenter')
-        case_description = request.form.get('description')  # Descripción del caso que ingresa el usuario
+        case_description = request.form.get('description')
         
         if 'file' not in request.files:
             return jsonify({'error': 'No se envió ningún archivo'}), 400
@@ -37,18 +71,18 @@ def process_json():
             )
             
             nombre_cliente = issuer_name if is_consumidor_final else f"{electronic_data.get('name1', '')} {electronic_data.get('lastname1', '')}".strip()
-            nombre_cliente = to_camel_case(nombre_cliente)  # Convertir a camel case
+            nombre_cliente = to_camel_case(nombre_cliente)
             
             # Procesar fecha y hora
             fecha_hora = datetime.strptime(json_data.get('InvoiceDate', ''), '%Y-%m-%d %H:%M:%S')
             fecha_formateada = fecha_hora.strftime('%d-%m-%y')
             hora_formateada = fecha_hora.strftime('%I:%M %p')
             
-            # Obtener el modelo de placa del campo description del primer elemento en items
+            # Obtener el modelo de placa
             items = json_data.get('items', [])
             modelo_placa = items[0].get('description', 'No especificado') if items else 'No especificado'
             
-            # Actualizar el nombre del cliente si se proporciona un nombre en el campo del formulario
+            # Actualizar el nombre del cliente si se proporciona
             if issuer_name:
                 nombre_cliente = to_camel_case(issuer_name)
             
@@ -57,9 +91,24 @@ def process_json():
                 'centroComercial': shopping_center,
                 'fechaPago': fecha_formateada,
                 'horaPago': hora_formateada,
-                'modeloPlaca': modelo_placa,  # Este es el valor del campo description del primer elemento en items
-                'descripcion': case_description  # Esta es la descripción que ingresa el usuario
+                'modeloPlaca': modelo_placa,
+                'descripcion': case_description
             }
+
+            # Guardar en la base de datos si se proporciona una descripción
+            if case_description:
+                doc = JsonDocument(
+                    nombre_cliente=nombre_cliente,
+                    centro_comercial=shopping_center,
+                    fecha_pago=fecha_formateada,
+                    hora_pago=hora_formateada,
+                    modelo_placa=modelo_placa,
+                    descripcion=case_description,
+                    json_data=json.dumps(json_data)
+                )
+                db.session.add(doc)
+                db.session.commit()
+                processed_data['id'] = doc.id
             
             return jsonify(processed_data)
             
@@ -69,7 +118,44 @@ def process_json():
             return jsonify({'error': f'Error al procesar la fecha: {str(e)}'}), 400
             
     except Exception as e:
+        print(f"Error procesando el JSON: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/json-files', methods=['GET'])
+def list_json_files():
+    try:
+        documents = JsonDocument.query.order_by(JsonDocument.fecha_creacion.desc()).all()
+        files = []
+        for doc in documents:
+            files.append({
+                'id': doc.id,
+                'name': f"{doc.nombre_cliente} - {doc.fecha_pago}",
+                'nombreCliente': doc.nombre_cliente,
+                'centroComercial': doc.centro_comercial,
+                'fechaPago': doc.fecha_pago,
+                'horaPago': doc.hora_pago,
+                'modeloPlaca': doc.modelo_placa,
+                'descripcion': doc.descripcion
+            })
+        return jsonify(files)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/test-db', methods=['GET'])
+def test_db():
+    try:
+        # Intenta hacer una consulta simple
+        result = db.session.execute(db.text('SELECT 1')).scalar()
+        return jsonify({
+            'status': 'éxito',
+            'mensaje': 'Conexión exitosa a la base de datos',
+            'resultado': result
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'mensaje': f'Error de conexión: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
