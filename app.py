@@ -141,6 +141,30 @@ def list_json_files():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/json-file/<int:file_id>', methods=['GET'])
+def get_json_file(file_id):
+    try:
+        print(f"Buscando archivo JSON con ID: {file_id}")
+        document = JsonDocument.query.get(file_id)
+        if not document:
+            print(f"Archivo JSON con ID {file_id} no encontrado")
+            return jsonify({'error': 'Archivo JSON no encontrado'}), 404
+        
+        print(f"Archivo JSON con ID {file_id} encontrado")
+        return jsonify({
+            'id': document.id,
+            'nombreCliente': document.nombre_cliente,
+            'centroComercial': document.centro_comercial,
+            'fechaPago': document.fecha_pago,
+            'horaPago': document.hora_pago,
+            'modeloPlaca': document.modelo_placa,
+            'descripcion': document.descripcion,
+            'jsonData': json.loads(document.json_data)  # Asegurarse de devolver el JSON correctamente
+        })
+    except Exception as e:
+        print(f"Error al obtener el archivo JSON: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/test-db', methods=['GET'])
 def test_db():
     try:
